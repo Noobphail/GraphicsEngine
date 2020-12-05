@@ -54,9 +54,23 @@ bool gouraudShading = false;
 bool phongShading = false;
 glm::vec4 lockedXBasis = glm::vec4(1, 0, 0, 0);
 bool lockedXAxis = false;
-bool softShadowsEnabled = true;
+bool softShadowsEnabled = false;
 
+bool animationFinished = false;
+std::string animationCommands[90];
+int animLenghts[3] = {60, 60, 60};
 unsigned long renderCounter = 0;
+unsigned long currentVideoFrame = 0;
+glm::vec3 currentTarget = glm::vec3(0,0,0);
+std::vector<glm::vec3> currentCameraTrack;
+int cameraWaypointsLeft=0;
+std::vector<ModelTriangle*> blueTriangles;
+std::vector<ModelTriangle*> redTriangles;
+glm::vec3 redMoveVector;
+glm::vec3 blueMoveVector;
+int redMovesLeft=0;
+int blueMovesLeft=0;
+
 std::vector<ModelTriangle *> trianglesChangedThisFrame;
 
 std::vector<glm::vec3> createPlanarLight(float maxRadius, float ringSpacing, float multiplierPerRing, int numInFirstRing, glm::vec3 point, glm::vec3 normal ){
@@ -136,10 +150,8 @@ bool getShadowed(glm::vec3 point, ModelTriangle *t, std::vector<ModelTriangle *>
 			}
 		}
 	}
-	//std::cout<<"2"<<std::endl;
 	for (int i = 0; i < trianglesChangedThisFrame.size(); ++i)
 	{
-		std::cout << "triangles changed" << std::endl;
 		if (checkForShadowIntersection(point + glm::normalize(normal) * shadowBias, lightPos - point, trianglesChangedThisFrame[i], lightDist))
 		{
 			if (!listContainsTriangle(likelyShadowers, trianglesChangedThisFrame[i]))
@@ -166,6 +178,26 @@ bool getShadowed(glm::vec3 point, ModelTriangle *t, std::vector<ModelTriangle *>
 		}
 	}
 	return false;
+}
+
+//gets points along the waypoints with provided transition speeds
+std::vector<glm::vec3> getPositionsAlongWaypoints(glm::vec3 startPoint, std::vector<int> transitionSpeeds, std::vector<glm::vec3> waypoints){
+    std::vector<glm::vec3> cameraPoints;
+
+    if (transitionSpeeds.size() != waypoints.size()){
+        std::cout << "Waypoint size does not match transitions" << std::endl;
+        return cameraPoints;
+    }
+    waypoints.insert(waypoints.begin(),startPoint);
+    for (int i = 0; i < transitionSpeeds.size(); ++i) {
+        std::vector<glm::vec3> currentPoints = interpolateThreeElementValues(waypoints[i],waypoints[i+1],transitionSpeeds[i]);
+        for (int j = 0; j < currentPoints.size()-2; ++j) {
+            std::cout << printVector(currentPoints[j]);
+            cameraPoints.push_back(currentPoints[j]);
+        }
+    }
+    cameraPoints.push_back(waypoints[waypoints.size()-1]);
+    return cameraPoints;
 }
 
 //returns the fraction of lights that hit the point 1 is fully lit 0 is dark
@@ -638,163 +670,239 @@ void rotateCameraAroundY(float thetaRadians)
 	std::cout << "qq " << cameraPos[0] << ", " << cameraPos[1] << ", " << cameraPos[2] << std::endl;
 }
 
+void orbitLeft(float angle, glm::vec3 lookPoint){
+    rotateCameraAroundY(angle);
+    lockedXAxis = false;
+    lookAt(lookPoint);
+}
+    
+void translateTriangles(std::vector<ModelTriangle*> triangles, glm::vec3 move){
+    for (int i = 0; i < triangles.size(); ++i) {
+        for (int j = 0; j < 3; ++j) {
+            triangles[i]->vertices[j] += move;
+        }
+    }
+}
+
+//hard coded multi frame translation start of blue and red cubes, would be better to have a velocity of some kind
+void startTranslateCubes(std::vector<ModelTriangle*> triangles, glm::vec3 movePerFrame, int frames, bool blueCube){
+    //Not the best code, my apologies if anyone sees this but it does all it needs
+    translateTriangles(triangles,movePerFrame);
+    if (blueCube){
+        blueMovesLeft = frames - 1;
+        blueMoveVector = movePerFrame;
+    }
+    else{
+        redMovesLeft = frames - 1;
+        redMoveVector = movePerFrame;
+    }
+}
+
+void advanceAnimation(){
+    if (cameraWaypointsLeft > 0){
+        //std::cout << currentCameraTrack[currentCameraTrack.size() - cameraWaypointsLeft][0] << "," << currentCameraTrack[currentCameraTrack.size() - cameraWaypointsLeft][1]<< std::endl;
+        cameraPos = glm::vec4(currentCameraTrack[currentCameraTrack.size() - cameraWaypointsLeft],cameraPos[3]);
+        lookAt(currentTarget);
+        cameraWaypointsLeft--;
+        redraw = true;
+    }
+    if (blueMovesLeft > 0){
+        translateTriangles(blueTriangles,blueMoveVector);
+        blueMovesLeft--;
+        redraw = true;
+    }
+    if (redMovesLeft > 0){
+        translateTriangles(redTriangles,redMoveVector);
+        redMovesLeft--;
+        redraw = true;
+    }
+    if (animationCommands[currentVideoFrame] != ""){
+        if (animationCommands[currentVideoFrame] == "leftOrbit"){
+            orbitLeft(0.261799,glm::vec3(0, 0, 0));
+        }
+        else if (animationCommands[currentVideoFrame] == "waypoint1"){
+            currentCameraTrack = getPositionsAlongWaypoints(glm::vec3(-2,-3,4),std::vector<int>{7,7},std::vector<glm::vec3>{glm::vec3(0,0,6),glm::vec3(2,3,4)});
+            cameraWaypointsLeft = currentCameraTrack.size();
+        }
+        else if (animationCommands[currentVideoFrame] == "blueRight"){
+            startTranslateCubes(blueTriangles,glm::vec3(0.3,0,0),20, true);
+        }
+        else if (animationCommands[currentVideoFrame] == "redLeft"){
+            startTranslateCubes(redTriangles,glm::vec3(-0.3,0,0),20, false);
+        }
+        else{
+            std::cout << "animation command unknown" << std::endl;
+        }
+    }
+
+    std::cout<<"frame: " <<currentVideoFrame<<std::endl;
+    currentVideoFrame++;
+}
+
 void handleEvent(SDL_Event event, DrawingWindow &window)
 {
 	if (event.type == SDL_KEYDOWN)
 	{
-		if (event.key.keysym.sym == SDLK_LEFT)
-			moveCamera(glm::vec3(cameraOrientation[0]));
-		else if (event.key.keysym.sym == SDLK_RIGHT)
-			moveCamera(-glm::vec3(cameraOrientation[0]));
-		else if (event.key.keysym.sym == SDLK_UP) //into screen
-			moveCamera(-glm::vec3(cameraOrientation[2]));
-		else if (event.key.keysym.sym == SDLK_DOWN) //out of screen
-			moveCamera(glm::vec3(cameraOrientation[2]));
-		else if (event.key.keysym.sym == SDLK_w) //move up
-			moveCamera(glm::vec3(cameraOrientation[1]));
-		else if (event.key.keysym.sym == SDLK_s) //move down
-			moveCamera(-glm::vec3(cameraOrientation[1]));
-		else if (event.key.keysym.sym == SDLK_i)
-		{ //rotate camera down(kinda)
-			rotateCameraAroundX(0.261799);
-			lookAt(glm::vec3(0, 0, 0));
-		}
-		else if (event.key.keysym.sym == SDLK_k)
-		{ //rotate camera down(kinda)
-			rotateCameraAroundX(-0.261799);
-			lookAt(glm::vec3(0, 0, 0));
-		}
-        else if (event.key.keysym.sym == SDLK_q)
-        { //rotate camera down(kinda)
-            softShadowsEnabled = !softShadowsEnabled;
-            redraw = true;
-        }
-		else if (event.key.keysym.sym == SDLK_j)
-		{ //rotate camera left(kinda)
-			rotateCameraAroundY(0.261799);
-			lockedXAxis = false;
-			lookAt(glm::vec3(0, 0, 0));
-		}
-		else if (event.key.keysym.sym == SDLK_l)
-		{ //rotate camera right(kinda)
-			rotateCameraAroundY(-0.261799);
-			lockedXAxis = false;
-			lookAt(glm::vec3(0, 0, 0));
-		}
-		else if (event.key.keysym.sym == SDLK_t) //pitch camera up
-			orientCameraX(-0.261799);
-		else if (event.key.keysym.sym == SDLK_g) //pitch camera down
-			orientCameraX(0.261799);
-		else if (event.key.keysym.sym == SDLK_f) //yaw camera left
-			orientCameraY(-0.261799);
-		else if (event.key.keysym.sym == SDLK_h) //yaw camera right
-			orientCameraY(0.261799);
-		else if (event.key.keysym.sym == SDLK_u)
-		{
-			CanvasPoint v0 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
-			CanvasPoint v1 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
-			CanvasPoint v2 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
-			Colour col = Colour(rand() % 256, rand() % 256, rand() % 256);
-			drawStrokedTriangle(window, v0, v1, v2, col);
-		}
-		else if (event.key.keysym.sym == SDLK_COLON) //t
-		{
-			CanvasPoint v0 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
-			CanvasPoint v1 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
-			CanvasPoint v2 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
-			Colour col = Colour(rand() % 256, rand() % 256, rand() % 256);
-			CanvasTriangle t = CanvasTriangle(v0, v1, v2);
-			fillTriangle(window, t, col);
-		}
-		else if (event.key.keysym.sym == SDLK_AT) //g
-		{
-			CanvasPoint v0 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
-			CanvasPoint v1 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
-			CanvasPoint v2 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
-			Colour col = Colour(rand() % 256, rand() % 256, rand() % 256);
-			drawStrokedTriangle(window, v0, v1, v2, Colour(255, 255, 255));
-			CanvasTriangle t = CanvasTriangle(v0, v1, v2);
-			fillTriangle(window, t, col);
-		}
-		else if (event.key.keysym.sym == SDLK_HASH) //t
-		{
-			TexturePoint t1 = TexturePoint(195, 5);
-			TexturePoint t2 = TexturePoint(395, 380);
-			TexturePoint t3 = TexturePoint(65, 330);
-			CanvasPoint p1 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
-			p1.texturePoint = t1;
-			CanvasPoint p2 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
-			p2.texturePoint = t2;
-			CanvasPoint p3 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
-			p3.texturePoint = t3;
-			CanvasTriangle t = CanvasTriangle(p1, p2, p3);
-			textureTriangle(window, t);
-		}
-		else if (event.key.keysym.sym == SDLK_1)
-		{
-			rendererSetting = 0;
-			redraw = true;
-		}
-		else if (event.key.keysym.sym == SDLK_2)
-		{
-			rendererSetting = 1;
-			redraw = true;
-		}
-		else if (event.key.keysym.sym == SDLK_3)
-		{
-			rendererSetting = 2;
-			redraw = true;
-		}
-		else if (event.key.keysym.sym == SDLK_LEFTBRACKET)
-		{
-			rendererSetting = (rendererSetting - 1) % numSettings;
-			redraw = true;
-		}
-		else if (event.key.keysym.sym == SDLK_e)
-		{
-            std::cout << "perspective : " << perspectiveCorrect << std::endl;
-			perspectiveCorrect = !perspectiveCorrect;
-			redraw = true;
-		}
-		else if (event.key.keysym.sym == SDLK_KP_2)
-		{
-			lightPos.y += 0.1;
-			redraw = true;
-		}
-		else if (event.key.keysym.sym == SDLK_KP_8)
-		{
-			lightPos.y -= 0.1;
-			redraw = true;
-		}
-		else if (event.key.keysym.sym == SDLK_KP_4)
-		{
-			lightPos.x -= 0.1;
-			redraw = true;
-		}
-		else if (event.key.keysym.sym == SDLK_KP_6)
-		{
-			lightPos.x += 0.1;
-			redraw = true;
-		}
-		else if (event.key.keysym.sym == SDLK_LSHIFT)
-		{
-			shiftHeld = true;
-			std::cout << "shift down" << std::endl;
-		}
-	}
-	else if (event.type == SDL_MOUSEBUTTONDOWN)
-	{
-		window.savePPM("output.ppm");
-	}
+        if (isAnimating && !animationFinished){
 
-	else if (event.type == SDL_KEYUP)
-	{
-		if (event.key.keysym.sym == SDLK_LSHIFT)
-		{
-			shiftHeld = false;
-			std::cout << "shift up" << std::endl;
-		}
-	}
+        }
+        else{
+            if (event.key.keysym.sym == SDLK_LEFT)
+                moveCamera(glm::vec3(cameraOrientation[0]));
+            else if (event.key.keysym.sym == SDLK_RIGHT)
+                moveCamera(-glm::vec3(cameraOrientation[0]));
+            else if (event.key.keysym.sym == SDLK_UP) //into screen
+                moveCamera(-glm::vec3(cameraOrientation[2]));
+            else if (event.key.keysym.sym == SDLK_DOWN) //out of screen
+                moveCamera(glm::vec3(cameraOrientation[2]));
+            else if (event.key.keysym.sym == SDLK_w) //move up
+                moveCamera(glm::vec3(cameraOrientation[1]));
+            else if (event.key.keysym.sym == SDLK_s) //move down
+                moveCamera(-glm::vec3(cameraOrientation[1]));
+            else if (event.key.keysym.sym == SDLK_i)
+            { //rotate camera down(kinda)
+                rotateCameraAroundX(0.261799);
+                lookAt(glm::vec3(0, 0, 0));
+            }
+            else if (event.key.keysym.sym == SDLK_k)
+            { //rotate camera down(kinda)
+                rotateCameraAroundX(-0.261799);
+                lookAt(glm::vec3(0, 0, 0));
+            }
+            else if (event.key.keysym.sym == SDLK_q)
+            { //rotate camera down(kinda)
+                softShadowsEnabled = !softShadowsEnabled;
+                redraw = true;
+            }
+            else if (event.key.keysym.sym == SDLK_j)
+            { //rotate camera left(kinda)
+                rotateCameraAroundY(0.261799);
+                lockedXAxis = false;
+                lookAt(glm::vec3(0, 0, 0));
+            }
+            else if (event.key.keysym.sym == SDLK_l)
+            { //rotate camera right(kinda)
+                rotateCameraAroundY(-0.261799);
+                lockedXAxis = false;
+                lookAt(glm::vec3(0, 0, 0));
+            }
+            else if (event.key.keysym.sym == SDLK_t) //pitch camera up
+                orientCameraX(-0.261799);
+            else if (event.key.keysym.sym == SDLK_g) //pitch camera down
+                orientCameraX(0.261799);
+            else if (event.key.keysym.sym == SDLK_f) //yaw camera left
+                orientCameraY(-0.261799);
+            else if (event.key.keysym.sym == SDLK_h) //yaw camera right
+                orientCameraY(0.261799);
+            else if (event.key.keysym.sym == SDLK_u)
+            {
+                CanvasPoint v0 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
+                CanvasPoint v1 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
+                CanvasPoint v2 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
+                Colour col = Colour(rand() % 256, rand() % 256, rand() % 256);
+                drawStrokedTriangle(window, v0, v1, v2, col);
+            }
+            else if (event.key.keysym.sym == SDLK_COLON) //t
+            {
+                CanvasPoint v0 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
+                CanvasPoint v1 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
+                CanvasPoint v2 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
+                Colour col = Colour(rand() % 256, rand() % 256, rand() % 256);
+                CanvasTriangle t = CanvasTriangle(v0, v1, v2);
+                fillTriangle(window, t, col);
+            }
+            else if (event.key.keysym.sym == SDLK_AT) //g
+            {
+                CanvasPoint v0 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
+                CanvasPoint v1 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
+                CanvasPoint v2 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
+                Colour col = Colour(rand() % 256, rand() % 256, rand() % 256);
+                drawStrokedTriangle(window, v0, v1, v2, Colour(255, 255, 255));
+                CanvasTriangle t = CanvasTriangle(v0, v1, v2);
+                fillTriangle(window, t, col);
+            }
+            else if (event.key.keysym.sym == SDLK_HASH) //t
+            {
+                TexturePoint t1 = TexturePoint(195, 5);
+                TexturePoint t2 = TexturePoint(395, 380);
+                TexturePoint t3 = TexturePoint(65, 330);
+                CanvasPoint p1 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
+                p1.texturePoint = t1;
+                CanvasPoint p2 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
+                p2.texturePoint = t2;
+                CanvasPoint p3 = CanvasPoint(rand() % WIDTH, rand() % HEIGHT);
+                p3.texturePoint = t3;
+                CanvasTriangle t = CanvasTriangle(p1, p2, p3);
+                textureTriangle(window, t);
+            }
+            else if (event.key.keysym.sym == SDLK_1)
+            {
+                rendererSetting = 0;
+                redraw = true;
+            }
+            else if (event.key.keysym.sym == SDLK_2)
+            {
+                rendererSetting = 1;
+                redraw = true;
+            }
+            else if (event.key.keysym.sym == SDLK_3)
+            {
+                rendererSetting = 2;
+                redraw = true;
+            }
+            else if (event.key.keysym.sym == SDLK_LEFTBRACKET)
+            {
+                rendererSetting = (rendererSetting - 1) % numSettings;
+                redraw = true;
+            }
+            else if (event.key.keysym.sym == SDLK_e)
+            {
+                std::cout << "perspective : " << perspectiveCorrect << std::endl;
+                perspectiveCorrect = !perspectiveCorrect;
+                redraw = true;
+            }
+            else if (event.key.keysym.sym == SDLK_KP_2)
+            {
+                lightPos.y += 0.1;
+                redraw = true;
+            }
+            else if (event.key.keysym.sym == SDLK_KP_8)
+            {
+                lightPos.y -= 0.1;
+                redraw = true;
+            }
+            else if (event.key.keysym.sym == SDLK_KP_4)
+            {
+                lightPos.x -= 0.1;
+                redraw = true;
+            }
+            else if (event.key.keysym.sym == SDLK_KP_6)
+            {
+                lightPos.x += 0.1;
+                redraw = true;
+            }
+            else if (event.key.keysym.sym == SDLK_LSHIFT)
+            {
+                shiftHeld = true;
+                std::cout << "shift down" << std::endl;
+            }
+        }
+
+        }
+    else if (event.type == SDL_MOUSEBUTTONDOWN)
+    {
+        window.savePPM("output.ppm");
+    }
+
+    else if (event.type == SDL_KEYUP)
+    {
+        if (event.key.keysym.sym == SDLK_LSHIFT)
+        {
+            shiftHeld = false;
+            std::cout << "shift up" << std::endl;
+        }
+    }
+
 }
 
 int main(int argc, char *argv[])
@@ -810,31 +918,50 @@ int main(int argc, char *argv[])
 	std::map<std::string, TextureMap> textMap;
 	std::vector<ModelTriangle> triangles;
 	std::vector<ModelTriangle *> renderedTriangles;
+    if (isAnimating){
 
-	if (loadSphere)
-	{
-		loadMTL("src/cornell-box.mtl", &matMap);		  //, &textMap);
-		triangles = loadOBJ("src/sphere.obj", 1, matMap); //, textMap);
-		sphereLightPos = glm::vec3(4,1.5,8);
-		lightPos = sphereLightPos;
-		lightIntensity = 600;
-		rendererSetting = 2;
-		//gouraudShading = true;
-		//phongShading = false;
-	}
-	else if (loadTextured)
-	{
-		loadMTL("src/textured-cornell-box.mtl", &matMap);				//, &textMap);
-		triangles = loadOBJ("src/textured-cornell-box.obj", 1, matMap); //, textMap);
-		rendererSetting = 2;
-	}
-	else
-	{
-		loadMTL("src/cornell-box.mtl", &matMap);			   //, &textMap);
-		triangles = loadOBJ("src/cornell-box.obj", 1, matMap); //, textMap);
-		rendererSetting = 2;
-        lightPoints = createPlanarLight(0.11,0.1,2,7,lightPos,glm::vec3(0,1,0));
-	}
+        if (animationNum==0){
+            loadMTL("src/cornell-box.mtl", &matMap);			   //, &textMap);
+            triangles = loadOBJ("src/cornell-box.obj", 1, matMap); //, textMap);
+            for (int i = 0; i < 10; ++i) {
+                blueTriangles.push_back(&triangles[22+i]);
+            }
+            for (int i = 0; i < 10; ++i) {
+                redTriangles.push_back(&triangles[12+i]);
+            }
+            rendererSetting = 2;
+            lightPoints = createPlanarLight(0.11,0.1,2,7,lightPos,glm::vec3(0,1,0));
+            animationCommands[1] = "redLeft";
+            animationCommands[2] = "blueRight";
+        }
+    }
+    else{
+        if (loadSphere)
+        {
+            loadMTL("src/cornell-box.mtl", &matMap);		  //, &textMap);
+            triangles = loadOBJ("src/sphere.obj", 1, matMap); //, textMap);
+            sphereLightPos = glm::vec3(4,1.5,8);
+            lightPos = sphereLightPos;
+            lightIntensity = 600;
+            rendererSetting = 2;
+            //gouraudShading = true;
+            //phongShading = false;
+        }
+        else if (loadTextured)
+        {
+            loadMTL("src/textured-cornell-box.mtl", &matMap);				//, &textMap);
+            triangles = loadOBJ("src/textured-cornell-box.obj", 1, matMap); //, textMap);
+            rendererSetting = 2;
+        }
+        else
+        {
+            loadMTL("src/cornell-box.mtl", &matMap);			   //, &textMap);
+            triangles = loadOBJ("src/cornell-box.obj", 1, matMap); //, textMap);
+            rendererSetting = 2;
+            lightPoints = createPlanarLight(0.11,0.1,2,7,lightPos,glm::vec3(0,1,0));
+        }
+    }
+
 	for (int i = 0; i < triangles.size(); ++i)
 	{
 		renderedTriangles.push_back(&triangles[i]);
@@ -846,13 +973,23 @@ int main(int argc, char *argv[])
 	std::cout << "COLOUR " << int32ToCol(colToInt32(test)) << std::endl;
 	while (true)
 	{
-		// We MUST poll for events - otherwise the window will freeze !
-		if (window.pollForInputEvents(event))
-			handleEvent(event, window);
 		//update(window);
 		if (redraw)
 			draw(window, renderedTriangles);
 		// Need to render the frame at the end, or nothing actually gets shown on the screen !
 		window.renderFrame();
+
+        if (isAnimating && !animationFinished){
+            advanceAnimation();
+            if (currentVideoFrame > animLenghts[animationNum]){
+                std::cout << "Animation finished!" << std::endl;
+                animationFinished = true;
+            }
+        }
+        else{
+            // We MUST poll for events - otherwise the window will freeze !
+            if (window.pollForInputEvents(event))
+                handleEvent(event, window);
+        }
 	}
 }
