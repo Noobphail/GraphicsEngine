@@ -14,7 +14,7 @@ struct Material {
     Colour specularColour; //Ks
     float specularExponent{}; //Ns
 	float reflectivity{}; // maybe use this
-    float opticalDensity{}; //refractive ndex, Ni
+    float opticalDensity{}; //refractive index, Ni
     float transparency{}; //Tr
     int illuminationModel{}; //illum
     bool usingTexture{};

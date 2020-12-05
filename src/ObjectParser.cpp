@@ -34,7 +34,9 @@ std::vector<ModelTriangle> loadOBJ(const std::string fileName, float scalingFact
                 currentCol.name = colStr;
                 if(m[colStr].usingTexture){
                     currentText = m[colStr].textureMap;
+                    std::cout << "TEXTURES" << currentText << std::endl;
                 }
+
                 // if (m[colStr].usingTexture)
                 // if (it != m.end()) //if colour
                 // {
@@ -62,7 +64,7 @@ std::vector<ModelTriangle> loadOBJ(const std::string fileName, float scalingFact
                 y *= -1 * scalingFactor;
                 if (nextLine.at(1) == 't')
                 {
-                    //std::cout << "wwwwww: " << currentText.height << std::endl;
+                    std::cout << "wwwwww: " << currentText.height << std::endl;
                     float xReal = x * currentText.width;
                     std::cout<<currentText.height<<"|||| ok"<<std::endl;
                     float yReal = -y * currentText.height;
@@ -177,6 +179,7 @@ void loadMTL(const std::string fileName, std::map<std::string, Material> *m) //,
                 firstMtl = false;
                 std::string name = nextLine.substr(7);
                 newMat = Material(name);
+                newMat.specularColour = Colour(255,255,255);
             }
             else if (nextLine.substr(0, 6) == "map_Kd")
             {

@@ -54,7 +54,7 @@ bool gouraudShading = false;
 bool phongShading = false;
 glm::vec4 lockedXBasis = glm::vec4(1, 0, 0, 0);
 bool lockedXAxis = false;
-bool softShadowsEnabled = false;
+bool softShadowsEnabled = true;
 
 bool animationFinished = false;
 std::string animationCommands[90];
@@ -66,12 +66,15 @@ std::vector<glm::vec3> currentCameraTrack;
 int cameraWaypointsLeft=0;
 std::vector<ModelTriangle*> blueTriangles;
 std::vector<ModelTriangle*> redTriangles;
+std::vector<ModelTriangle*> sphereTriangles;
 glm::vec3 redMoveVector;
 glm::vec3 blueMoveVector;
 int redMovesLeft=0;
 int blueMovesLeft=0;
 
 std::vector<ModelTriangle *> trianglesChangedThisFrame;
+
+void advanceAnimation(DrawingWindow &window);
 
 std::vector<glm::vec3> createPlanarLight(float maxRadius, float ringSpacing, float multiplierPerRing, int numInFirstRing, glm::vec3 point, glm::vec3 normal ){
 
@@ -212,6 +215,66 @@ float getShadeStrength(std::vector<glm::vec3> pointLights, glm::vec3 normal, Ray
     return hitLights / lights;
 }
 
+Colour getLitColour(RayTriangleIntersection currentIntersection, std::vector<ModelTriangle *> triangles, glm::vec3 lightPosition, glm::vec3 normal, glm::vec3 viewPos){
+    double proxScalar = 0;
+    double incScalar = 0;
+    double specScalar = 0;
+    float lightness = 1;
+
+    //RayTriangleIntersection shadowIntersection = getClosestIntersection(currentIntersection.intersectionPoint + glm::normalize(normal) * shadowBias, lightPosition - currentIntersection.intersectionPoint, triangles, 9999);
+    bool shaded;
+    if (softShadowsEnabled){
+        lightness = getShadeStrength(lightPoints,normal,currentIntersection,triangles);
+        shaded = (lightness == 0);
+    }
+    else{
+        shaded = isShadowed(currentIntersection, triangles, normal, lightPosition);
+    }
+
+    if (shaded)
+    { //if not lit up
+    }
+    else
+    {
+        //proximity
+        float distanceToLight = glm::length2(currentIntersection.intersectionPoint - lightPosition); //vscode shut up glm does have member length2
+        if (distanceToLight == 0)
+        {
+            std::cout << "light inside object oh no" << std::endl;
+        }
+        proxScalar = lightIntensity / (4 * glm::pi<float>() * distanceToLight);
+        //angle of incidence
+        glm::vec3 lightVector = currentIntersection.intersectionPoint - lightPosition;
+        incScalar = glm::dot(glm::normalize(lightVector), glm::normalize(normal));
+        incScalar = clamp(incScalar, 0.0, 1.0);
+        //specular
+        glm::vec3 normDP = glm::normalize(normal) * (glm::dot(glm::normalize(lightVector), glm::normalize(normal)));
+        glm::vec3 reflectionVec = glm::normalize(lightVector) - 2 * normDP;
+        specScalar = glm::dot(glm::normalize(glm::vec3(viewPos.x, viewPos.y, viewPos.z) - currentIntersection.intersectionPoint), glm::normalize(reflectionVec));
+        specScalar = clamp(specScalar, 0, 1);
+        specScalar = std::pow(specScalar, specExponent);
+    }
+    double brightness = glm::max(specScalar, proxScalar * incScalar);
+    brightness = clamp(brightness, 0, 1);
+    brightness = glm::max(brightness, minBrightness); //one line ambient lighting *dabs*
+    brightness = brightness * lightness + minBrightness * (1-lightness);
+    Colour specCol = currentIntersection.intersectedTriangle->mat.specularColour;
+    Colour diffuseCol = currentIntersection.intersectedTriangle->colour;
+    Colour outCol = Colour();
+    if (brightness <= 0.3){
+        outCol.red = clamp(diffuseCol.red * brightness, 0, 255);
+        outCol.green = clamp(diffuseCol.green * brightness, 0, 255);
+        outCol.blue = clamp(diffuseCol.blue * brightness, 0, 255);
+    }
+    else{
+        outCol.red = clamp((specScalar * specCol.red + proxScalar * incScalar * diffuseCol.red) * lightness + diffuseCol.red * minBrightness * (1-lightness), 0, 255);
+        outCol.blue = clamp((specScalar * specCol.blue + proxScalar * incScalar * diffuseCol.blue) * lightness + diffuseCol.blue * minBrightness * (1-lightness), 0, 255);
+        outCol.green = clamp((specScalar * specCol.green + proxScalar * incScalar * diffuseCol.green) * lightness + diffuseCol.green * minBrightness * (1-lightness), 0, 255);
+    }
+
+    return outCol;
+}
+
 double getBrightness(RayTriangleIntersection currentIntersection, std::vector<ModelTriangle *> triangles, glm::vec3 lightPosition, glm::vec3 normal)
 {
 	double proxScalar = 0;
@@ -329,10 +392,11 @@ Colour getReflectionColour(glm::vec3 incidenceAng, glm::vec3 p, glm::vec3 normal
 			return getRefractionColour(glm::normalize(reflectedVector), reflectIntersection.intersectionPoint, reflectIntersection.intersectedTriangle->normal, triangles, reflectIntersection.intersectedTriangle->mat.opticalDensity, currentDepth + 1);
 		}
 		outCol = reflectIntersection.intersectedTriangle->colour;
-		float brightness = getBrightness(reflectIntersection, triangles, lightPos, nextNormal);
+		/*float brightness = getBrightness(reflectIntersection, triangles, lightPos, nextNormal);
 		outCol.red = clamp(outCol.red * brightness, 0, 255);
 		outCol.green = clamp(outCol.green * brightness, 0, 255);
-		outCol.blue = clamp(outCol.blue * brightness, 0, 255);
+		outCol.blue = clamp(outCol.blue * brightness, 0, 255);*/
+		outCol = getLitColour(reflectIntersection, triangles, lightPos, nextNormal,p);
 	}
 	else
 	{
@@ -370,16 +434,16 @@ glm::vec3 calculateRefraction(glm::vec3 incidenctRay, glm::vec3 point, glm::vec3
 }
 
 
-Colour getRefractionColour(glm::vec3 incidenctRay, glm::vec3 point, glm::vec3 normal, std::vector<ModelTriangle *> triangles, float opticalDensity, int rayDepth)
+Colour getRefractionColour(glm::vec3 incidenctRay, glm::vec3 p, glm::vec3 normal, std::vector<ModelTriangle *> triangles, float opticalDensity, int rayDepth)
 {
 
 	Colour outCol;
 	incidenctRay = glm::normalize(incidenctRay);
 	Colour reflectionCol, refractionCol;
 
-	glm::vec3 refractedRay = calculateRefraction(incidenctRay, point, normal, opticalDensity, rayDepth);
+	glm::vec3 refractedRay = calculateRefraction(incidenctRay, p, normal, opticalDensity, rayDepth);
 
-	RayTriangleIntersection nextIntersection = getClosestIntersection(point, refractedRay, triangles, 999);
+	RayTriangleIntersection nextIntersection = getClosestIntersection(p, refractedRay, triangles, 999);
 	if (nextIntersection.distanceFromCamera != -1)
 	{
 		glm::vec3 intersectedNormal = getIntersectionNormal(nextIntersection);
@@ -396,10 +460,11 @@ Colour getRefractionColour(glm::vec3 incidenctRay, glm::vec3 point, glm::vec3 no
 		{
 			glm::vec3 intersectedNormal = getIntersectionNormal(nextIntersection);
 			outCol = nextIntersection.intersectedTriangle->colour;
-			float brightness = getBrightness(nextIntersection, triangles, lightPos, intersectedNormal);
+			/*float brightness = getBrightness(nextIntersection, triangles, lightPos, intersectedNormal);
 			outCol.red = clamp(outCol.red * brightness, 0, 255);
 			outCol.green = clamp(outCol.green * brightness, 0, 255);
-			outCol.blue = clamp(outCol.blue * brightness, 0, 255);
+			outCol.blue = clamp(outCol.blue * brightness, 0, 255);*/
+			outCol = getLitColour(nextIntersection, triangles, lightPos, intersectedNormal, p);
 		}
 	}
 	else
@@ -482,17 +547,18 @@ void raycastDraw(DrawingWindow &window, std::vector<ModelTriangle *> triangles, 
                         }*/
 						brightness = barycentricCoefBrightness(currentIntersection.intersectionPoint, currentIntersection.intersectedTriangle, vertexBrightness[currentIntersection.triangleIndex]);
 						brightness = std::max(brightness, minBrightness);
+                        outCol.red = clamp(outCol.red * brightness, 0, 255);
+                        outCol.green = clamp(outCol.green * brightness, 0, 255);
+                        outCol.blue = clamp(outCol.blue * brightness, 0, 255);
 					}
 					else
 					{
 						glm::vec3 currentNormal = getIntersectionNormal(currentIntersection);
-						brightness = getBrightness(currentIntersection, triangles, lightPos, currentNormal);
+						//brightness = getBrightness(currentIntersection, triangles, lightPos, currentNormal);
+						outCol = getLitColour(currentIntersection,triangles,lightPos,currentNormal,glm::vec3(camPos));
 					}
-					outCol.red = clamp(outCol.red * brightness, 0, 255);
-					outCol.green = clamp(outCol.green * brightness, 0, 255);
-					outCol.blue = clamp(outCol.blue * brightness, 0, 255);
-				}
 
+				}
 				window.setPixelColour(x, y, colToInt32(outCol));
 			}
 			else
@@ -675,6 +741,11 @@ void orbitLeft(float angle, glm::vec3 lookPoint){
     lockedXAxis = false;
     lookAt(lookPoint);
 }
+
+void orbitUp(float angle, glm::vec3 lookPoint){
+    rotateCameraAroundX(angle);
+    lookAt(lookPoint);
+}
     
 void translateTriangles(std::vector<ModelTriangle*> triangles, glm::vec3 move){
     for (int i = 0; i < triangles.size(); ++i) {
@@ -696,47 +767,6 @@ void startTranslateCubes(std::vector<ModelTriangle*> triangles, glm::vec3 movePe
         redMovesLeft = frames - 1;
         redMoveVector = movePerFrame;
     }
-}
-
-void advanceAnimation(){
-    if (cameraWaypointsLeft > 0){
-        //std::cout << currentCameraTrack[currentCameraTrack.size() - cameraWaypointsLeft][0] << "," << currentCameraTrack[currentCameraTrack.size() - cameraWaypointsLeft][1]<< std::endl;
-        cameraPos = glm::vec4(currentCameraTrack[currentCameraTrack.size() - cameraWaypointsLeft],cameraPos[3]);
-        lookAt(currentTarget);
-        cameraWaypointsLeft--;
-        redraw = true;
-    }
-    if (blueMovesLeft > 0){
-        translateTriangles(blueTriangles,blueMoveVector);
-        blueMovesLeft--;
-        redraw = true;
-    }
-    if (redMovesLeft > 0){
-        translateTriangles(redTriangles,redMoveVector);
-        redMovesLeft--;
-        redraw = true;
-    }
-    if (animationCommands[currentVideoFrame] != ""){
-        if (animationCommands[currentVideoFrame] == "leftOrbit"){
-            orbitLeft(0.261799,glm::vec3(0, 0, 0));
-        }
-        else if (animationCommands[currentVideoFrame] == "waypoint1"){
-            currentCameraTrack = getPositionsAlongWaypoints(glm::vec3(-2,-3,4),std::vector<int>{7,7},std::vector<glm::vec3>{glm::vec3(0,0,6),glm::vec3(2,3,4)});
-            cameraWaypointsLeft = currentCameraTrack.size();
-        }
-        else if (animationCommands[currentVideoFrame] == "blueRight"){
-            startTranslateCubes(blueTriangles,glm::vec3(0.3,0,0),20, true);
-        }
-        else if (animationCommands[currentVideoFrame] == "redLeft"){
-            startTranslateCubes(redTriangles,glm::vec3(-0.3,0,0),20, false);
-        }
-        else{
-            std::cout << "animation command unknown" << std::endl;
-        }
-    }
-
-    std::cout<<"frame: " <<currentVideoFrame<<std::endl;
-    currentVideoFrame++;
 }
 
 void handleEvent(SDL_Event event, DrawingWindow &window)
@@ -905,6 +935,66 @@ void handleEvent(SDL_Event event, DrawingWindow &window)
 
 }
 
+void advanceAnimation(DrawingWindow &window ){
+    std::string frameName = std::to_string(currentVideoFrame);
+    while (frameName.length() < 5){
+        frameName = "0" + frameName;
+    }
+    window.savePPM(frameName + ".ppm");
+    std::cout << "saved: " << frameName << std::endl;
+    if (cameraWaypointsLeft > 0){
+        //std::cout << currentCameraTrack[currentCameraTrack.size() - cameraWaypointsLeft][0] << "," << currentCameraTrack[currentCameraTrack.size() - cameraWaypointsLeft][1]<< std::endl;
+        cameraPos = glm::vec4(currentCameraTrack[currentCameraTrack.size() - cameraWaypointsLeft],cameraPos[3]);
+        lookAt(currentTarget);
+        cameraWaypointsLeft--;
+        redraw = true;
+    }
+    if (blueMovesLeft > 0){
+        translateTriangles(blueTriangles,blueMoveVector);
+        blueMovesLeft--;
+        redraw = true;
+    }
+    if (redMovesLeft > 0){
+        translateTriangles(redTriangles,redMoveVector);
+        redMovesLeft--;
+        redraw = true;
+    }
+    if (animationCommands[currentVideoFrame] != ""){
+        if (animationCommands[currentVideoFrame] == "leftOrbit"){
+            orbitLeft(0.261799,glm::vec3(0, 0, 0));
+        }
+        else if (animationCommands[currentVideoFrame] == "rightOrbit"){
+            orbitLeft(-0.261799,glm::vec3(0, 0, 0));
+        }
+        else if (animationCommands[currentVideoFrame] == "upOrbit"){
+            orbitUp(0.261799, glm::vec3(0,0,0));
+        }
+        else if (animationCommands[currentVideoFrame] == "waypoint1"){
+            currentCameraTrack = getPositionsAlongWaypoints(glm::vec3(-2,-3,8),std::vector<int>{7,7,7},std::vector<glm::vec3>{glm::vec3(0,0,10),glm::vec3(2,2,8),glm::vec3(0,-1,8)});
+            cameraWaypointsLeft = currentCameraTrack.size();
+        }
+        else if (animationCommands[currentVideoFrame] == "blueRight"){
+            startTranslateCubes(blueTriangles,glm::vec3(0.2,0,0),10, true);
+        }
+        else if (animationCommands[currentVideoFrame] == "redLeft"){
+            startTranslateCubes(redTriangles,glm::vec3(-0.2,0,0),10, false);
+        }
+        else if (animationCommands[currentVideoFrame] == "blueDown"){
+            startTranslateCubes(blueTriangles,glm::vec3(0,0,0.2),10, true);
+        }
+        else if (animationCommands[currentVideoFrame] == "redUp"){
+            startTranslateCubes(redTriangles,glm::vec3(0,0,-0.2),10, false);
+        }
+        else{
+            std::cout << "animation command unknown" << std::endl;
+        }
+    }
+
+    std::cout<<"frame: " <<currentVideoFrame<<std::endl;
+    currentVideoFrame++;
+}
+
+
 int main(int argc, char *argv[])
 {
 	DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
@@ -919,8 +1009,51 @@ int main(int argc, char *argv[])
 	std::vector<ModelTriangle> triangles;
 	std::vector<ModelTriangle *> renderedTriangles;
     if (isAnimating){
-
         if (animationNum==0){
+            loadMTL("src/textured-cornell-box.mtl", &matMap);			   //, &textMap);
+            triangles = loadOBJ("src/textured-cornell-box.obj", 1, matMap); //, textMap);
+
+            rendererSetting = 1;
+            lightPoints = createPlanarLight(0.11,0.1,2,7,lightPos,glm::vec3(0,1,0));
+            int currentAnimationCommandIndex = 0;
+            for (int i = 0; i < 5; ++i) {
+                animationCommands[currentAnimationCommandIndex] = "rightOrbit";
+                currentAnimationCommandIndex++;
+            }
+            for (int i = 0; i < 10; ++i) {
+                animationCommands[currentAnimationCommandIndex] = "upOrbit";
+                currentAnimationCommandIndex++;
+            }
+        }
+        if (animationNum==1){
+            loadMTL("src/cornell-box.mtl", &matMap);			   //, &textMap);
+            triangles = loadOBJ("src/cornell-box.obj", 1, matMap); //, textMap);
+            std::vector<ModelTriangle> nextObject = loadOBJ("src/sphere.obj", 0.5, matMap);
+            int sphereSize = nextObject.size();
+            for (int i = 0; i < sphereSize; ++i) {
+                triangles.push_back(nextObject[i]);
+            }
+
+            for (int i = 0; i < 10; ++i) {
+                blueTriangles.push_back(&triangles[22+i]);
+            }
+            for (int i = 0; i < 10; ++i) {
+                redTriangles.push_back(&triangles[12+i]);
+            }
+            for (int i = 0; i < sphereSize; ++i) {
+                sphereTriangles.push_back(&triangles[32+i]);
+            }
+            translateTriangles(sphereTriangles,glm::vec3(3,1.2,3.5));
+            rendererSetting = 2;
+            lightPoints = createPlanarLight(0.11,0.05,2,10,lightPos,glm::vec3(0,1,0));
+            animationCommands[0] = "waypoint1";
+            animationCommands[1] = "redLeft";
+            animationCommands[2] = "blueRight";
+            animationCommands[11] = "redUp";
+            animationCommands[12] = "blueDown";
+        }
+
+        if (animationNum==2){
             loadMTL("src/cornell-box.mtl", &matMap);			   //, &textMap);
             triangles = loadOBJ("src/cornell-box.obj", 1, matMap); //, textMap);
             for (int i = 0; i < 10; ++i) {
@@ -931,8 +1064,11 @@ int main(int argc, char *argv[])
             }
             rendererSetting = 2;
             lightPoints = createPlanarLight(0.11,0.1,2,7,lightPos,glm::vec3(0,1,0));
+            animationCommands[0] = "waypoint1";
             animationCommands[1] = "redLeft";
             animationCommands[2] = "blueRight";
+            animationCommands[11] = "redUp";
+            animationCommands[12] = "blueDown";
         }
     }
     else{
@@ -952,13 +1088,15 @@ int main(int argc, char *argv[])
             loadMTL("src/textured-cornell-box.mtl", &matMap);				//, &textMap);
             triangles = loadOBJ("src/textured-cornell-box.obj", 1, matMap); //, textMap);
             rendererSetting = 2;
+            lightPoints = createPlanarLight(0.11,0.05,2,10,lightPos,glm::vec3(0,1,0));
         }
         else
         {
             loadMTL("src/cornell-box.mtl", &matMap);			   //, &textMap);
             triangles = loadOBJ("src/cornell-box.obj", 1, matMap); //, textMap);
             rendererSetting = 2;
-            lightPoints = createPlanarLight(0.11,0.1,2,7,lightPos,glm::vec3(0,1,0));
+
+            lightPoints = createPlanarLight(0.11,0.05,2,7,lightPos,glm::vec3(0,1,0));
         }
     }
 
@@ -980,7 +1118,7 @@ int main(int argc, char *argv[])
 		window.renderFrame();
 
         if (isAnimating && !animationFinished){
-            advanceAnimation();
+            advanceAnimation(window);
             if (currentVideoFrame > animLenghts[animationNum]){
                 std::cout << "Animation finished!" << std::endl;
                 animationFinished = true;

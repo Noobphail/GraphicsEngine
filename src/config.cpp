@@ -19,10 +19,10 @@ const int maxReflections = 5000;
 
 const float di = 9;
 
-const int animationNum = 0;
+const int animationNum = 1;
 const bool isAnimating = true;
 const bool loadSphere = false;
-const bool loadTextured = false;
+const bool loadTextured = true;
 const bool mirror = false;
 
 
