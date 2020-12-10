@@ -22,7 +22,7 @@ const float di = 9;
 const int animationNum = 1;
 const bool isAnimating = true;
 const bool loadSphere = false;
-const bool loadTextured = true;
+const bool loadTextured = false;
 const bool mirror = false;
 
 

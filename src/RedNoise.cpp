@@ -57,8 +57,8 @@ bool lockedXAxis = false;
 bool softShadowsEnabled = true;
 
 bool animationFinished = false;
-std::string animationCommands[90];
-int animLenghts[3] = {60, 60, 60};
+std::string animationCommands[250];
+int animLenghts[3] = {91, 240, 60};
 unsigned long renderCounter = 0;
 unsigned long currentVideoFrame = 0;
 glm::vec3 currentTarget = glm::vec3(0,0,0);
@@ -67,10 +67,12 @@ int cameraWaypointsLeft=0;
 std::vector<ModelTriangle*> blueTriangles;
 std::vector<ModelTriangle*> redTriangles;
 std::vector<ModelTriangle*> sphereTriangles;
+std::vector<ModelTriangle*> mirrorFace;
 glm::vec3 redMoveVector;
 glm::vec3 blueMoveVector;
 int redMovesLeft=0;
 int blueMovesLeft=0;
+int frameSaveOffset=0;
 
 std::vector<ModelTriangle *> trianglesChangedThisFrame;
 
@@ -215,12 +217,21 @@ float getShadeStrength(std::vector<glm::vec3> pointLights, glm::vec3 normal, Ray
     return hitLights / lights;
 }
 
+Colour getTexturePointColour(ModelTriangle *t, glm::vec3 p)
+{
+    std::vector<double> baryCoefs = barycentricCoefs(p, t);
+    float texturePointX = baryCoefs[0] * t->texturePoints[0].x + baryCoefs[1] * t->texturePoints[1].x + baryCoefs[2] * t->texturePoints[2].x;
+    float texturePointY = baryCoefs[0] * t->texturePoints[0].y + baryCoefs[1] * t->texturePoints[1].y + baryCoefs[2] * t->texturePoints[2].y;
+
+    return int32ToCol(t->mat.textureMap.pixels[texturePointToIndex(TexturePoint(texturePointX, texturePointY), t->mat.textureMap)]);
+}
+
 Colour getLitColour(RayTriangleIntersection currentIntersection, std::vector<ModelTriangle *> triangles, glm::vec3 lightPosition, glm::vec3 normal, glm::vec3 viewPos){
     double proxScalar = 0;
     double incScalar = 0;
     double specScalar = 0;
     float lightness = 1;
-
+    double diffuseBrightness = 0;
     //RayTriangleIntersection shadowIntersection = getClosestIntersection(currentIntersection.intersectionPoint + glm::normalize(normal) * shadowBias, lightPosition - currentIntersection.intersectionPoint, triangles, 9999);
     bool shaded;
     if (softShadowsEnabled){
@@ -254,23 +265,44 @@ Colour getLitColour(RayTriangleIntersection currentIntersection, std::vector<Mod
         specScalar = clamp(specScalar, 0, 1);
         specScalar = std::pow(specScalar, specExponent);
     }
-    double brightness = glm::max(specScalar, proxScalar * incScalar);
+    diffuseBrightness = (1-specScalar) * proxScalar * incScalar;
+    diffuseBrightness = glm::max(minBrightness, diffuseBrightness);
+    double brightness = glm::max(specScalar, diffuseBrightness);
     brightness = clamp(brightness, 0, 1);
     brightness = glm::max(brightness, minBrightness); //one line ambient lighting *dabs*
     brightness = brightness * lightness + minBrightness * (1-lightness);
     Colour specCol = currentIntersection.intersectedTriangle->mat.specularColour;
-    Colour diffuseCol = currentIntersection.intersectedTriangle->colour;
+    Colour diffuseCol;
+    if (currentIntersection.intersectedTriangle->mat.usingTexture)
+    {
+        diffuseCol = getTexturePointColour(currentIntersection.intersectedTriangle, currentIntersection.intersectionPoint);
+    }
+    else
+    {
+        diffuseCol = Colour(currentIntersection.intersectedTriangle->colour);
+    }
+
     Colour outCol = Colour();
-    if (brightness <= 0.3){
+    /*if (brightness <= 0.3){
         outCol.red = clamp(diffuseCol.red * brightness, 0, 255);
         outCol.green = clamp(diffuseCol.green * brightness, 0, 255);
         outCol.blue = clamp(diffuseCol.blue * brightness, 0, 255);
-    }
-    else{
-        outCol.red = clamp((specScalar * specCol.red + proxScalar * incScalar * diffuseCol.red) * lightness + diffuseCol.red * minBrightness * (1-lightness), 0, 255);
-        outCol.blue = clamp((specScalar * specCol.blue + proxScalar * incScalar * diffuseCol.blue) * lightness + diffuseCol.blue * minBrightness * (1-lightness), 0, 255);
-        outCol.green = clamp((specScalar * specCol.green + proxScalar * incScalar * diffuseCol.green) * lightness + diffuseCol.green * minBrightness * (1-lightness), 0, 255);
-    }
+    }*/
+
+        Colour lightingCol;
+        if (specScalar > proxScalar * incScalar){
+            lightingCol = specCol;
+        }else{
+            lightingCol = diffuseCol;
+        }
+        //outCol.red = clamp(lightingCol.red * brightness, 0, 255);
+        //outCol.blue = clamp(lightingCol.blue * brightness, 0, 255);
+        //outCol.green = clamp(lightingCol.green * brightness,0, 255);
+
+        outCol.red = clamp((specScalar * specCol.red + diffuseBrightness * diffuseCol.red) * lightness + diffuseCol.red * minBrightness * (1-lightness), 0, 255);
+        outCol.blue = clamp((specScalar * specCol.blue + diffuseBrightness * diffuseCol.blue) * lightness + diffuseCol.blue * minBrightness * (1-lightness), 0, 255);
+        outCol.green = clamp((specScalar * specCol.green + diffuseBrightness * diffuseCol.green) * lightness  + diffuseCol.green * minBrightness * (1-lightness), 0, 255);
+
 
     return outCol;
 }
@@ -363,6 +395,8 @@ std::vector<std::vector<double>> getVertexBrightness(std::vector<ModelTriangle *
 	return vertexBrightness;
 }
 
+
+
 double barycentricCoefBrightness(glm::vec3 p, ModelTriangle *t, std::vector<double> vertexBrightnesses)
 {
 	std::vector<double> baryCoefs = barycentricCoefs(p, t);
@@ -391,7 +425,15 @@ Colour getReflectionColour(glm::vec3 incidenceAng, glm::vec3 p, glm::vec3 normal
 		{
 			return getRefractionColour(glm::normalize(reflectedVector), reflectIntersection.intersectionPoint, reflectIntersection.intersectedTriangle->normal, triangles, reflectIntersection.intersectedTriangle->mat.opticalDensity, currentDepth + 1);
 		}
-		outCol = reflectIntersection.intersectedTriangle->colour;
+		//outCol = reflectIntersection.intersectedTriangle->colour;
+        if (reflectIntersection.intersectedTriangle->mat.usingTexture)
+        {
+            outCol = getTexturePointColour(reflectIntersection.intersectedTriangle, reflectIntersection.intersectionPoint);
+        }
+        else
+        {
+            outCol = Colour(reflectIntersection.intersectedTriangle->colour);
+        }
 		/*float brightness = getBrightness(reflectIntersection, triangles, lightPos, nextNormal);
 		outCol.red = clamp(outCol.red * brightness, 0, 255);
 		outCol.green = clamp(outCol.green * brightness, 0, 255);
@@ -472,15 +514,6 @@ Colour getRefractionColour(glm::vec3 incidenctRay, glm::vec3 p, glm::vec3 normal
 		outCol = Colour(0, 0, 0);
 	}
 	return outCol;
-}
-
-Colour getTexturePointColour(ModelTriangle *t, glm::vec3 p)
-{
-	std::vector<double> baryCoefs = barycentricCoefs(p, t);
-	float texturePointX = baryCoefs[0] * t->texturePoints[0].x + baryCoefs[1] * t->texturePoints[1].x + baryCoefs[2] * t->texturePoints[2].x;
-	float texturePointY = baryCoefs[0] * t->texturePoints[0].y + baryCoefs[1] * t->texturePoints[1].y + baryCoefs[2] * t->texturePoints[2].y;
-
-	return int32ToCol(t->mat.textureMap.pixels[texturePointToIndex(TexturePoint(texturePointX, texturePointY), t->mat.textureMap)]);
 }
 
 void raycastDraw(DrawingWindow &window, std::vector<ModelTriangle *> triangles, float scaleFactor)
@@ -935,8 +968,34 @@ void handleEvent(SDL_Event event, DrawingWindow &window)
 
 }
 
+void changeToGlass(std::vector<ModelTriangle*> tris){
+    for (int i = 0; i < tris.size(); ++i) {
+        tris[i]->mat.opticalDensity = 1.1;
+    }
+    redraw=true;
+}
+void changeToNotGlass(std::vector<ModelTriangle*> tris){
+    for (int i = 0; i < tris.size(); ++i) {
+        tris[i]->mat.opticalDensity = 1;
+    }
+    redraw=true;
+}
+
+void changeToNotMirror(std::vector<ModelTriangle*> tris){
+    for (int i = 0; i < tris.size(); ++i) {
+        tris[i]->mat.reflectivity = 0;
+    }
+    redraw=true;
+}
+void changeToMirror(std::vector<ModelTriangle*> tris){
+    for (int i = 0; i < tris.size(); ++i) {
+        tris[i]->mat.reflectivity = 1;
+    }
+    redraw=true;
+}
+
 void advanceAnimation(DrawingWindow &window ){
-    std::string frameName = std::to_string(currentVideoFrame);
+    std::string frameName = std::to_string(currentVideoFrame + frameSaveOffset);
     while (frameName.length() < 5){
         frameName = "0" + frameName;
     }
@@ -961,29 +1020,51 @@ void advanceAnimation(DrawingWindow &window ){
     }
     if (animationCommands[currentVideoFrame] != ""){
         if (animationCommands[currentVideoFrame] == "leftOrbit"){
-            orbitLeft(0.261799,glm::vec3(0, 0, 0));
+            orbitLeft(0.0261799,glm::vec3(0, 0, 0));
         }
         else if (animationCommands[currentVideoFrame] == "rightOrbit"){
-            orbitLeft(-0.261799,glm::vec3(0, 0, 0));
+            orbitLeft(-0.0261799,glm::vec3(0, 0, 0));
         }
         else if (animationCommands[currentVideoFrame] == "upOrbit"){
-            orbitUp(0.261799, glm::vec3(0,0,0));
+            changeToNotGlass(blueTriangles);
+        }
+        else if (animationCommands[currentVideoFrame] == "blueNotMirror"){
+            changeToNotMirror(mirrorFace);
+        }
+        else if (animationCommands[currentVideoFrame] == "blueMirror"){
+            changeToMirror(mirrorFace);
+        }
+        else if (animationCommands[currentVideoFrame] == "blueNotGlass"){
+            changeToNotGlass(blueTriangles);
+            changeToMirror(mirrorFace);
+            redraw=true;
+        }
+        else if (animationCommands[currentVideoFrame] == "blueGlass"){
+            changeToGlass(blueTriangles);
+            changeToNotMirror(mirrorFace);
+            redraw=true;
+        }
+        else if (animationCommands[currentVideoFrame] == "bigRightOrbit"){
+            orbitLeft(-0.04,glm::vec3(0, 0, 0));
+        }
+        else if (animationCommands[currentVideoFrame] == "bigUpOrbit"){
+            orbitUp(0.05, glm::vec3(0,0,0));
         }
         else if (animationCommands[currentVideoFrame] == "waypoint1"){
-            currentCameraTrack = getPositionsAlongWaypoints(glm::vec3(-2,-3,8),std::vector<int>{7,7,7},std::vector<glm::vec3>{glm::vec3(0,0,10),glm::vec3(2,2,8),glm::vec3(0,-1,8)});
+            currentCameraTrack = getPositionsAlongWaypoints(glm::vec3(-2,-3,8),std::vector<int>{70,70,70},std::vector<glm::vec3>{glm::vec3(0,0,10),glm::vec3(2,2,8),glm::vec3(0,-1,8)});
             cameraWaypointsLeft = currentCameraTrack.size();
         }
         else if (animationCommands[currentVideoFrame] == "blueRight"){
-            startTranslateCubes(blueTriangles,glm::vec3(0.2,0,0),10, true);
+            startTranslateCubes(blueTriangles,glm::vec3(0.02,0,0),100, true);
         }
         else if (animationCommands[currentVideoFrame] == "redLeft"){
-            startTranslateCubes(redTriangles,glm::vec3(-0.2,0,0),10, false);
+            startTranslateCubes(redTriangles,glm::vec3(-0.02,0,0),100, false);
         }
         else if (animationCommands[currentVideoFrame] == "blueDown"){
-            startTranslateCubes(blueTriangles,glm::vec3(0,0,0.2),10, true);
+            startTranslateCubes(blueTriangles,glm::vec3(0,0,0.02),100, true);
         }
         else if (animationCommands[currentVideoFrame] == "redUp"){
-            startTranslateCubes(redTriangles,glm::vec3(0,0,-0.2),10, false);
+            startTranslateCubes(redTriangles,glm::vec3(0,0,-0.02),100, false);
         }
         else{
             std::cout << "animation command unknown" << std::endl;
@@ -993,6 +1074,8 @@ void advanceAnimation(DrawingWindow &window ){
     std::cout<<"frame: " <<currentVideoFrame<<std::endl;
     currentVideoFrame++;
 }
+
+
 
 
 int main(int argc, char *argv[])
@@ -1016,12 +1099,12 @@ int main(int argc, char *argv[])
             rendererSetting = 1;
             lightPoints = createPlanarLight(0.11,0.1,2,7,lightPos,glm::vec3(0,1,0));
             int currentAnimationCommandIndex = 0;
-            for (int i = 0; i < 5; ++i) {
-                animationCommands[currentAnimationCommandIndex] = "rightOrbit";
+            for (int i = 0; i < 30; ++i) {
+                animationCommands[currentAnimationCommandIndex] = "bigRightOrbit";
                 currentAnimationCommandIndex++;
             }
-            for (int i = 0; i < 10; ++i) {
-                animationCommands[currentAnimationCommandIndex] = "upOrbit";
+            for (int i = 0; i < 60; ++i) {
+                animationCommands[currentAnimationCommandIndex] = "bigUpOrbit";
                 currentAnimationCommandIndex++;
             }
         }
@@ -1040,17 +1123,27 @@ int main(int argc, char *argv[])
             for (int i = 0; i < 10; ++i) {
                 redTriangles.push_back(&triangles[12+i]);
             }
+            mirrorFace.push_back(&triangles[30]);
+            mirrorFace.push_back(&triangles[31]);
+            for (int i = 0; i < triangles.size(); ++i) {
+                std::cout << i << " " << triangles[i].mat.reflectivity << std::endl;
+            }
             for (int i = 0; i < sphereSize; ++i) {
                 sphereTriangles.push_back(&triangles[32+i]);
             }
             translateTriangles(sphereTriangles,glm::vec3(3,1.2,3.5));
             rendererSetting = 2;
+            softShadowsEnabled=true;
             lightPoints = createPlanarLight(0.11,0.05,2,10,lightPos,glm::vec3(0,1,0));
             animationCommands[0] = "waypoint1";
-            animationCommands[1] = "redLeft";
-            animationCommands[2] = "blueRight";
-            animationCommands[11] = "redUp";
-            animationCommands[12] = "blueDown";
+            animationCommands[2] = "redLeft";
+            animationCommands[3] = "blueRight";
+            animationCommands[1] = "blueGlass";
+            animationCommands[75] = "blueNotGlass";
+            animationCommands[102] = "redUp";
+            animationCommands[103] = "blueDown";
+            advanceAnimation(window);
+            frameSaveOffset=92;
         }
 
         if (animationNum==2){
@@ -1063,12 +1156,19 @@ int main(int argc, char *argv[])
                 redTriangles.push_back(&triangles[12+i]);
             }
             rendererSetting = 2;
-            lightPoints = createPlanarLight(0.11,0.1,2,7,lightPos,glm::vec3(0,1,0));
-            animationCommands[0] = "waypoint1";
-            animationCommands[1] = "redLeft";
-            animationCommands[2] = "blueRight";
-            animationCommands[11] = "redUp";
-            animationCommands[12] = "blueDown";
+            softShadowsEnabled=true;
+            lightPoints = createPlanarLight(0.11,0.05,2,10,lightPos,glm::vec3(0,1,0));
+            int currentAnimationCommandIndex = 0;
+            for (int i = 0; i < 10; ++i) {
+                animationCommands[currentAnimationCommandIndex] = "bigRightOrbit";
+                currentAnimationCommandIndex++;
+            }
+            for (int i = 0; i < 10; ++i) {
+                animationCommands[currentAnimationCommandIndex] = "bigUpOrbit";
+                currentAnimationCommandIndex++;
+            }
+            frameSaveOffset = 305;
+
         }
     }
     else{
